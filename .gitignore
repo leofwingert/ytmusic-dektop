@@ -1,0 +1,5 @@
+/target
+app.lock
+.app.lock
+.thumbnails_cache
+**/*.rs.bk

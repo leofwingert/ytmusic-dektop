@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=YouTube Music
+Comment=Native YouTube Music Desktop Client in Rust (Zero Electron)
+Exec=ytmusic-rs
+Icon=/home/leo/Projetos/ytmusic-dektop/assets/icon.png
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Player;Music;
+Keywords=youtube;music;player;streaming;
+StartupWMClass=YouTube Music Desktop
