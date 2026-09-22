@@ -50,18 +50,173 @@ impl Resolver {
         }
     }
 
+    /// Check if Node.js or Deno is available on the system for YouTube JS challenges.
+    pub fn has_js_runtime() -> bool {
+        if PathBuf::from("/usr/bin/node").exists()
+            || PathBuf::from("/usr/local/bin/node").exists()
+            || PathBuf::from("/usr/bin/deno").exists()
+        {
+            return true;
+        }
+        std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Locate cookies file for yt-dlp (cookies.txt or cookies.json).
+    pub fn find_cookies_path() -> Option<PathBuf> {
+        let dir = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("ytmusic-rs");
+        let txt = dir.join("cookies.txt");
+        if txt.exists() {
+            return Some(txt);
+        }
+        let json = dir.join("cookies.json");
+        if json.exists() {
+            return Some(json);
+        }
+        None
+    }
+
+    /// Local directory for caching downloaded audio files: ~/.cache/ytmusic-rs/audio/
+    pub fn audio_cache_dir() -> PathBuf {
+        let dir = dirs::cache_dir()
+            .unwrap_or_else(|| PathBuf::from(".cache"))
+            .join("ytmusic-rs/audio");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            error!("Failed to create audio cache directory {:?}: {e}", dir);
+        }
+        dir
+    }
+
+    /// Extract video ID from URL or return the trimmed ID.
+    pub fn extract_video_id(input: &str) -> String {
+        let trimmed = input.trim();
+        if trimmed.len() == 11 && trimmed.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+            return trimmed.to_string();
+        }
+        if let Some(pos) = trimmed.find("v=") {
+            let rest = &trimmed[pos + 2..];
+            let id: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+            if !id.is_empty() {
+                return id;
+            }
+        }
+        if let Some(pos) = trimmed.find("youtu.be/") {
+            let rest = &trimmed[pos + 9..];
+            let id: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+            if !id.is_empty() {
+                return id;
+            }
+        }
+        trimmed.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_")
+    }
+
+    /// Fetch or download track audio as MP3 bytes.
+    /// Checks local disk cache first (~/.cache/ytmusic-rs/audio/<video_id>.mp3).
+    /// If not present, downloads & converts via yt-dlp in ~2-4s.
+    pub async fn get_or_download_audio(video_id: &str, title_hint: Option<&str>) -> Result<Vec<u8>, String> {
+        let clean_id = Self::extract_video_id(video_id);
+        let cache_dir = Self::audio_cache_dir();
+        let cache_file = cache_dir.join(format!("{clean_id}.mp3"));
+
+        // 1. Check disk cache
+        if cache_file.exists() {
+            if let Ok(meta) = std::fs::metadata(&cache_file) {
+                if meta.len() > 1000 {
+                    info!(
+                        "Loaded audio from disk cache for '{}' ({:.2} MB, path: {:?})",
+                        title_hint.unwrap_or(video_id),
+                        meta.len() as f64 / (1024.0 * 1024.0),
+                        cache_file
+                    );
+                    return std::fs::read(&cache_file)
+                        .map_err(|e| format!("Failed to read cached audio file: {e}"));
+                }
+            }
+        }
+
+        // 2. Download and convert via yt-dlp
+        let url = format!("https://www.youtube.com/watch?v={clean_id}");
+        info!(
+            "Downloading and converting audio for '{}' via yt-dlp...",
+            title_hint.unwrap_or(video_id)
+        );
+
+        let bin = Self::find_ytdlp_bin();
+        let mut cmd = Command::new(&bin);
+
+        if Self::has_js_runtime() {
+            cmd.args(["--js-runtimes", "node"]);
+        }
+
+        if let Some(cookies) = Self::find_cookies_path() {
+            cmd.arg("--cookies").arg(cookies);
+        }
+
+        let output_template = cache_dir.join(format!("{clean_id}.%(ext)s"));
+
+        cmd.args([
+            "--no-playlist",
+            "-x",
+            "--audio-format", "mp3",
+            "--audio-quality", "0",
+            "-o", output_template.to_str().unwrap(),
+            &url,
+        ]);
+
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| format!("Failed to execute yt-dlp at {:?}: {e}", bin))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!("yt-dlp download failed: {stderr}");
+            return Err(format!("yt-dlp download failed: {stderr}"));
+        }
+
+        if cache_file.exists() {
+            let bytes = std::fs::read(&cache_file)
+                .map_err(|e| format!("Failed to read downloaded audio file: {e}"))?;
+            info!(
+                "Successfully downloaded and cached '{}' ({} bytes)",
+                title_hint.unwrap_or(video_id),
+                bytes.len()
+            );
+            Ok(bytes)
+        } else {
+            Err(format!("Downloaded file not found at {:?}", cache_file))
+        }
+    }
+
     /// Resolve a YouTube URL or video ID into a direct audio stream URL.
     pub async fn resolve_stream_url(input: &str) -> Result<String, String> {
         let url = Self::normalize_url(input);
         info!("Resolving stream URL for: {url}");
 
         let bin = Self::find_ytdlp_bin();
-        let output = Command::new(&bin)
-            .args([
-                "--format", "bestaudio",
-                "--get-url",
-                &url,
-            ])
+        let mut cmd = Command::new(&bin);
+
+        if Self::has_js_runtime() {
+            cmd.args(["--js-runtimes", "node"]);
+        }
+        if let Some(cookies) = Self::find_cookies_path() {
+            cmd.arg("--cookies").arg(cookies);
+        }
+
+        cmd.args([
+            "--format", "bestaudio",
+            "--get-url",
+            &url,
+        ]);
+
+        let output = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
@@ -85,12 +240,22 @@ impl Resolver {
         info!("Resolving metadata for: {url}");
 
         let bin = Self::find_ytdlp_bin();
-        let output = Command::new(&bin)
-            .args([
-                "--dump-json",
-                "--no-download",
-                &url,
-            ])
+        let mut cmd = Command::new(&bin);
+
+        if Self::has_js_runtime() {
+            cmd.args(["--js-runtimes", "node"]);
+        }
+        if let Some(cookies) = Self::find_cookies_path() {
+            cmd.arg("--cookies").arg(cookies);
+        }
+
+        cmd.args([
+            "--dump-json",
+            "--no-download",
+            &url,
+        ]);
+
+        let output = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
@@ -138,7 +303,7 @@ impl Resolver {
 
     /// Normalize user input into a full YouTube URL.
     /// Accepts: full URLs, youtube.com/watch?v=..., music.youtube.com, or bare video IDs.
-    fn normalize_url(input: &str) -> String {
+    pub fn normalize_url(input: &str) -> String {
         let input = input.trim();
         if input.starts_with("http://") || input.starts_with("https://") {
             input.to_string()
@@ -169,4 +334,32 @@ mod tests {
         assert!(stream.starts_with("https://"), "Stream URL should start with https://");
         println!("Stream URL resolved successfully (length: {})", stream.len());
     }
+
+    #[test]
+    fn test_extract_video_id() {
+        assert_eq!(Resolver::extract_video_id("eMGRt0A9Yns"), "eMGRt0A9Yns");
+        assert_eq!(Resolver::extract_video_id("https://www.youtube.com/watch?v=eMGRt0A9Yns"), "eMGRt0A9Yns");
+        assert_eq!(Resolver::extract_video_id("https://music.youtube.com/watch?v=eMGRt0A9Yns&list=RD123"), "eMGRt0A9Yns");
+        assert_eq!(Resolver::extract_video_id("https://youtu.be/eMGRt0A9Yns?t=10"), "eMGRt0A9Yns");
+    }
+
+    #[tokio::test]
+    async fn test_get_or_download_audio() {
+        // Test with a short test video: jNQXAC9IVRw (First video on YouTube, ~19s)
+        let res = Resolver::get_or_download_audio("jNQXAC9IVRw", Some("Me at the zoo")).await;
+        assert!(res.is_ok(), "Failed to download audio: {:?}", res.err());
+        let bytes = res.unwrap();
+        assert!(!bytes.is_empty(), "Downloaded audio should not be empty");
+
+        // Verify cache file exists
+        let cache_file = Resolver::audio_cache_dir().join("jNQXAC9IVRw.mp3");
+        assert!(cache_file.exists(), "Cache file should exist");
+
+        // Second call should load from cache
+        let cached_res = Resolver::get_or_download_audio("jNQXAC9IVRw", Some("Me at the zoo")).await;
+        assert!(cached_res.is_ok());
+        assert_eq!(cached_res.unwrap().len(), bytes.len());
+    }
 }
+
+

@@ -43,9 +43,8 @@ impl Player {
     }
 
     /// Load and play audio from raw bytes.
-    pub fn play_bytes(&mut self, data: Vec<u8>, duration_secs: f32) -> Result<(), String> {
-        info!("Playing audio ({} bytes, {:.1}s)", data.len(), duration_secs);
-
+    /// Returns the detected or passed duration in seconds.
+    pub fn play_bytes(&mut self, data: Vec<u8>, duration_secs: f32) -> Result<f32, String> {
         self.stop();
 
         let cursor = Cursor::new(data.clone());
@@ -53,18 +52,28 @@ impl Player {
         let source = Decoder::new(buf_reader)
             .map_err(|e| format!("Failed to decode audio: {e}"))?;
 
+        let mut actual_duration = duration_secs;
+        if actual_duration <= 0.0 {
+            if let Some(dur) = source.total_duration() {
+                actual_duration = dur.as_secs_f32();
+            }
+        }
+
+        info!("Playing audio ({} bytes, {:.1}s)", data.len(), actual_duration);
+
         self.sink.set_volume(self.current_volume);
         self.sink.append(source);
         self.sink.play();
         self.current_data = Some(data);
-        self.duration_secs = duration_secs;
+        self.duration_secs = actual_duration;
         self.playback_start = Some(Instant::now());
         self.offset_secs = 0.0;
         self.is_paused = false;
         self.pause_instant = None;
 
-        Ok(())
+        Ok(actual_duration)
     }
+
 
     /// Seek to a specific timestamp in seconds.
     pub fn seek(&mut self, pos_secs: f32) {

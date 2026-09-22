@@ -134,3 +134,36 @@ impl Default for AppState {
         }
     }
 }
+
+/// Parse time string in "M:SS" or "H:MM:SS" format into total seconds.
+pub fn parse_time_str(s: &str) -> f32 {
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        2 => {
+            let m: f32 = parts[0].trim().parse().unwrap_or(0.0);
+            let s: f32 = parts[1].trim().parse().unwrap_or(0.0);
+            m * 60.0 + s
+        }
+        3 => {
+            let h: f32 = parts[0].trim().parse().unwrap_or(0.0);
+            let m: f32 = parts[1].trim().parse().unwrap_or(0.0);
+            let s: f32 = parts[2].trim().parse().unwrap_or(0.0);
+            h * 3600.0 + m * 60.0 + s
+        }
+        _ => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_time_str() {
+        assert_eq!(parse_time_str("4:41"), 281.0);
+        assert_eq!(parse_time_str("0:30"), 30.0);
+        assert_eq!(parse_time_str("1:02:15"), 3735.0);
+        assert_eq!(parse_time_str(""), 0.0);
+    }
+}
+

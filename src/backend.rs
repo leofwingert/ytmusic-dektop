@@ -130,11 +130,12 @@ impl Backend {
                 }
 
                 Action::PlaySearchResult(result) => {
+                    let duration_secs = crate::state::parse_time_str(&result.duration);
                     let track = TrackMeta {
                         title: result.title,
                         artist: result.artist,
                         thumbnail_url: result.thumbnail_url,
-                        duration_secs: 0.0,
+                        duration_secs,
                         video_id: result.video_id,
                     };
                     Self::handle_play_meta(&mut player, &state, &ctx, track).await;
@@ -436,38 +437,21 @@ impl Backend {
         }
         ctx.request_repaint();
 
-        let (meta_result, url_result) = tokio::join!(
-            Resolver::resolve_metadata(input),
-            Resolver::resolve_stream_url(input),
-        );
-
-        let meta = match meta_result {
-            Ok(m) => Some(m),
+        let track = match Resolver::resolve_metadata(input).await {
+            Ok(m) => m,
             Err(e) => {
-                warn!("Could not resolve metadata: {e}");
-                None
+                warn!("Could not resolve metadata for {input}: {e}");
+                TrackMeta {
+                    title: input.to_string(),
+                    artist: "YouTube".to_string(),
+                    thumbnail_url: String::new(),
+                    duration_secs: 0.0,
+                    video_id: Resolver::extract_video_id(input),
+                }
             }
         };
 
-        let stream_url = match url_result {
-            Ok(url) => url,
-            Err(e) => {
-                let mut s = state.write().unwrap();
-                s.status = PlayerStatus::Error(e);
-                ctx.request_repaint();
-                return;
-            }
-        };
-
-        let track = meta.unwrap_or_else(|| TrackMeta {
-            title: input.to_string(),
-            artist: "YouTube".to_string(),
-            thumbnail_url: String::new(),
-            duration_secs: 0.0,
-            video_id: input.to_string(),
-        });
-
-        Self::download_and_play(player, state, ctx, stream_url, track).await;
+        Self::download_and_play(player, state, ctx, track).await;
     }
 
     async fn handle_play_meta(
@@ -484,59 +468,44 @@ impl Backend {
         }
         ctx.request_repaint();
 
-        // Resolve stream URL and update metadata if duration missing
-        let (url_result, meta_result) = tokio::join!(
-            Resolver::resolve_stream_url(&track.video_id),
-            Resolver::resolve_metadata(&track.video_id)
-        );
-
-        let stream_url = match url_result {
-            Ok(url) => url,
-            Err(e) => {
-                let mut s = state.write().unwrap();
-                s.status = PlayerStatus::Error(e);
-                ctx.request_repaint();
-                return;
-            }
-        };
-
-        if let Ok(m) = meta_result {
-            if track.duration_secs == 0.0 {
-                track.duration_secs = m.duration_secs;
-            }
-            if track.thumbnail_url.is_empty() {
-                track.thumbnail_url = m.thumbnail_url;
+        // If metadata is incomplete (missing thumbnail or title is raw ID), fetch metadata in background
+        if track.title == track.video_id || track.thumbnail_url.is_empty() {
+            if let Ok(m) = Resolver::resolve_metadata(&track.video_id).await {
+                if track.title == track.video_id {
+                    track.title = m.title;
+                    track.artist = m.artist;
+                }
+                if track.thumbnail_url.is_empty() {
+                    track.thumbnail_url = m.thumbnail_url;
+                }
+                if track.duration_secs == 0.0 {
+                    track.duration_secs = m.duration_secs;
+                }
             }
         }
 
-        Self::download_and_play(player, state, ctx, stream_url, track).await;
+        Self::download_and_play(player, state, ctx, track).await;
     }
 
     async fn download_and_play(
         player: &mut Player,
         state: &Arc<RwLock<AppState>>,
         ctx: &egui::Context,
-        stream_url: String,
-        track: TrackMeta,
+        mut track: TrackMeta,
     ) {
-        info!("Downloading audio stream for '{}'...", track.title);
-        let download_result = reqwest::get(&stream_url).await;
-        let audio_data = match download_result {
-            Ok(resp) => match resp.bytes().await {
-                Ok(bytes) => {
-                    info!("Downloaded {} bytes", bytes.len());
-                    bytes.to_vec()
-                }
-                Err(e) => {
-                    let mut s = state.write().unwrap();
-                    s.status = PlayerStatus::Error(format!("Download error: {e}"));
-                    ctx.request_repaint();
-                    return;
-                }
-            },
+        info!("Fetching audio for '{}' (ID: {})...", track.title, track.video_id);
+        {
+            let mut s = state.write().unwrap();
+            s.status = PlayerStatus::Loading;
+        }
+        ctx.request_repaint();
+
+        let audio_data = match Resolver::get_or_download_audio(&track.video_id, Some(&track.title)).await {
+            Ok(bytes) => bytes,
             Err(e) => {
+                error!("Audio retrieval error for '{}': {e}", track.title);
                 let mut s = state.write().unwrap();
-                s.status = PlayerStatus::Error(format!("HTTP error: {e}"));
+                s.status = PlayerStatus::Error(e);
                 ctx.request_repaint();
                 return;
             }
@@ -545,21 +514,24 @@ impl Backend {
         let duration = track.duration_secs;
 
         match player.play_bytes(audio_data, duration) {
-            Ok(()) => {
+            Ok(actual_dur) => {
                 let mut s = state.write().unwrap();
                 s.status = PlayerStatus::Playing;
+                track.duration_secs = actual_dur;
                 s.current_track = Some(track.clone());
-                s.duration_secs = duration;
+                s.duration_secs = actual_dur;
                 s.progress_secs = 0.0;
                 Self::save_settings(&s);
             }
             Err(e) => {
+                error!("Playback error: {e}");
                 let mut s = state.write().unwrap();
                 s.status = PlayerStatus::Error(e);
             }
         }
         ctx.request_repaint();
     }
+
 
     fn save_settings(state: &AppState) {
         let theme_str = match state.theme {

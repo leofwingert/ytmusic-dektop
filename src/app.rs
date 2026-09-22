@@ -339,7 +339,7 @@ impl App {
 
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new("Native, lightweight Rust music player with zero Electron")
+                    RichText::new("Native, lightweight Rust music player")
                         .font(FontId::proportional(15.0))
                         .color(Color32::from_rgb(160, 160, 160)),
                 );
@@ -608,7 +608,7 @@ impl App {
                     title: result.title.clone(),
                     artist: result.artist.clone(),
                     thumbnail_url: result.thumbnail_url.clone(),
-                    duration_secs: 0.0,
+                    duration_secs: crate::state::parse_time_str(&result.duration),
                     video_id: result.video_id.clone(),
                 };
 
@@ -788,7 +788,7 @@ impl App {
                             title: song.title.clone(),
                             artist: song.artist.clone(),
                             thumbnail_url: song.thumbnail_url.clone(),
-                            duration_secs: 0.0,
+                            duration_secs: crate::state::parse_time_str(&song.duration),
                             video_id: song.video_id.clone(),
                         };
 
