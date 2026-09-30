@@ -1,6 +1,6 @@
 # YouTube Music Desktop (Rust)
 
-A native, blazing-fast YouTube Music desktop client for Linux and Windows built with Rust, egui, rodio, and tokio. 
+A native YouTube Music desktop client for Linux and Windows built with Rust, egui, rodio, and tokio. 
 
 ![Rust](https://img.shields.io/badge/Rust-1.80+-orange.svg)
 ![egui](https://img.shields.io/badge/UI-egui%200.31-blue.svg)
