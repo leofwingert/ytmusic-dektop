@@ -1,6 +1,6 @@
 # YouTube Music Desktop (Rust)
 
-A native, blazing-fast YouTube Music desktop client for Linux and Windows built with Rust, egui, rodio, and tokio. Completely free of Electron or WebView.
+A native, blazing-fast YouTube Music desktop client for Linux and Windows built with Rust, egui, rodio, and tokio. 
 
 ![Rust](https://img.shields.io/badge/Rust-1.80+-orange.svg)
 ![egui](https://img.shields.io/badge/UI-egui%200.31-blue.svg)
@@ -11,7 +11,6 @@ A native, blazing-fast YouTube Music desktop client for Linux and Windows built 
 
 ## ✨ Features
 
-- **Pure Native Desktop App**: No Electron, no WebView, ultra-low memory footprint (~30-50MB RAM).
 - **Search & Playback**: Instant search across YouTube Music catalog with album covers, artist metadata, and duration.
 - **Audio Streaming & Seeking**: High-quality audio streaming via `yt-dlp` subprocess + Symphonia audio decoding with smooth seeking.
 - **Queue Management**: Upcoming tracks queue with auto-advance, reordering, shuffle mode (🔀), and 3-state repeat (🔁 Off, All, One).
